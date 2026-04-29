@@ -40,12 +40,19 @@ class TransistorAgingResult:
     nbti_ratio: float = 0.0       # доля времени в режиме NBTI
     nbti_delta_vth_v: float = 0.0 # сдвиг порогового напряжения
     nbti_mobility_factor: float = 1.0  # знаменатель для u0
+    # Сырые данные из LTspice (NBTI)
+    nbti_integ_v_s: float = 0.0   # ∫ |Vsg| dt  [В·с]
+    nbti_max_vsg_vdg: float = 0.0 # max(Vsg·Vdg) [В²]
 
     # HCI (только NMOS)
     hci_active_time_s: float = 0.0
     hci_ratio: float = 0.0
     hci_delta_vth_v: float = 0.0
     hci_mobility_factor: float = 1.0
+    # Сырые данные из LTspice (HCI)
+    hci_integ_a_s: float = 0.0    # ∫ I_hci dt  [А·с]
+    hci_max_hci_a: float = 0.0    # max I_hci   [А]
+    hci_max_id_a: float = 0.0     # max |Id|    [А]
 
 
 @dataclass
@@ -53,6 +60,7 @@ class AgingResults:
     transistors: list[TransistorAgingResult] = field(default_factory=list)
     temperature_c: float = 27.0
     sim_time_s: float = 0.0
+    supply_voltage_v: float | None = None
 
     @property
     def temperature_k(self) -> float:
@@ -140,6 +148,8 @@ def calculate_nbti(
     result.nbti_ratio = ratio
     result.nbti_delta_vth_v = delta_vth
     result.nbti_mobility_factor = mobility_factor
+    result.nbti_integ_v_s = integ_val
+    result.nbti_max_vsg_vdg = max_val
     return result
 
 
@@ -203,6 +213,9 @@ def calculate_hci(
     result.hci_ratio = ratio
     result.hci_delta_vth_v = delta_vth
     result.hci_mobility_factor = mobility_factor
+    result.hci_integ_a_s = integ_val
+    result.hci_max_hci_a = max_hci
+    result.hci_max_id_a = max_id
     return result
 
 
@@ -218,6 +231,7 @@ def run_aging_analysis(
     tox_pmos: float,
     vth_pmos: float,
     target_years: float,
+    supply_voltage_v: float | None = None,
 ) -> AgingResults:
     """
     Запускает расчёт старения для всех выбранных транзисторов.
@@ -225,6 +239,7 @@ def run_aging_analysis(
     results = AgingResults(
         temperature_c=log.temperature_c,
         sim_time_s=log.sim_time_s,
+        supply_voltage_v=supply_voltage_v,
     )
 
     chosen_upper = [n.upper() for n in chosen_names]

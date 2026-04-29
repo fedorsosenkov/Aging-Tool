@@ -5,6 +5,7 @@
 from __future__ import annotations
 from pathlib import Path
 from datetime import datetime
+from typing import Optional
 
 from core.aging import AgingResults
 
@@ -120,12 +121,16 @@ _HTML_TEMPLATE = """\
 <body>
 <div class="container">
   <h1>Анализ старения МОП-транзисторов</h1>
-  <p class="subtitle">Сформирован {date} · Срок службы: {years} лет</p>
+  <p class="subtitle">Сформирован {date} · Время наработки: {years} лет</p>
 
   <div class="meta-grid">
     <div class="meta-card">
       <div class="label">Температура</div>
       <div class="value">{temp_c} °C / {temp_k} K</div>
+    </div>
+    <div class="meta-card">
+      <div class="label">Напряжение питания</div>
+      <div class="value">{supply_voltage}</div>
     </div>
     <div class="meta-card">
       <div class="label">Время симуляции</div>
@@ -178,12 +183,43 @@ def _fmt_voltage(v: float) -> str:
     return f"{v * 1000:.3f} мВ" if abs(v) < 0.1 else f"{v:.5f} В"
 
 
+def _fmt_current(a: float) -> str:
+    """Форматирует ток: А → нА / мкА / мА / А."""
+    aa = abs(a)
+    if aa == 0:
+        return "0 А"
+    if aa < 1e-9:
+        return f"{a * 1e12:.3g} пА"
+    if aa < 1e-6:
+        return f"{a * 1e9:.3g} нА"
+    if aa < 1e-3:
+        return f"{a * 1e6:.3g} мкА"
+    if aa < 1:
+        return f"{a * 1e3:.3g} мА"
+    return f"{a:.3g} А"
+
+
+def _fmt_charge(c: float) -> str:
+    """Форматирует заряд А·с (Кл) → пКл / нКл / мкКл."""
+    ac = abs(c)
+    if ac == 0:
+        return "0 Кл"
+    if ac < 1e-9:
+        return f"{c * 1e12:.3g} пКл"
+    if ac < 1e-6:
+        return f"{c * 1e9:.3g} нКл"
+    if ac < 1e-3:
+        return f"{c * 1e6:.3g} мкКл"
+    return f"{c:.3g} Кл"
+
+
 def _build_hci_section(results: AgingResults) -> str:
     nmos = results.nmos_results()
     if not nmos:
         return ""
+    sorted_nmos = sorted(nmos, key=lambda x: x.hci_delta_vth_v, reverse=True)
     rows = []
-    for ar in sorted(nmos, key=lambda x: x.hci_delta_vth_v, reverse=True):
+    for ar in sorted_nmos:
         rows.append(f"""
     <tr>
       <td class="mono"><b>{ar.name}</b></td>
@@ -192,6 +228,15 @@ def _build_hci_section(results: AgingResults) -> str:
       <td class="mono">{_fmt_voltage(ar.hci_delta_vth_v)}</td>
       <td class="mono">{ar.hci_mobility_factor:.6f}</td>
       <td>{_severity_chip(ar.hci_delta_vth_v)}</td>
+    </tr>""")
+    raw_rows = []
+    for ar in sorted_nmos:
+        raw_rows.append(f"""
+    <tr>
+      <td class="mono"><b>{ar.name}</b></td>
+      <td class="mono">{_fmt_charge(ar.hci_integ_a_s)}</td>
+      <td class="mono">{_fmt_current(ar.hci_max_hci_a)}</td>
+      <td class="mono">{_fmt_current(ar.hci_max_id_a)}</td>
     </tr>""")
     return f"""
   <h2>Эффект горячих носителей (HCI) <span class="badge nmos-badge">NMOS</span></h2>
@@ -208,15 +253,33 @@ def _build_hci_section(results: AgingResults) -> str:
     </thead>
     <tbody>{''.join(rows)}
     </tbody>
-  </table>"""
+  </table>
+  <details style="margin-bottom:24px">
+    <summary style="cursor:pointer;color:var(--muted);font-size:0.85rem;padding:4px 0">
+      Данные из LTspice (исходные измерения)
+    </summary>
+    <table style="margin-top:8px">
+      <thead>
+        <tr>
+          <th>Транзистор</th>
+          <th>∫ I_hci dt</th>
+          <th>max I_hci</th>
+          <th>max |Id|</th>
+        </tr>
+      </thead>
+      <tbody>{''.join(raw_rows)}
+      </tbody>
+    </table>
+  </details>"""
 
 
 def _build_nbti_section(results: AgingResults) -> str:
     pmos = results.pmos_results()
     if not pmos:
         return ""
+    sorted_pmos = sorted(pmos, key=lambda x: x.nbti_delta_vth_v, reverse=True)
     rows = []
-    for ar in sorted(pmos, key=lambda x: x.nbti_delta_vth_v, reverse=True):
+    for ar in sorted_pmos:
         rows.append(f"""
     <tr>
       <td class="mono"><b>{ar.name}</b></td>
@@ -225,6 +288,14 @@ def _build_nbti_section(results: AgingResults) -> str:
       <td class="mono">{_fmt_voltage(ar.nbti_delta_vth_v)}</td>
       <td class="mono">{ar.nbti_mobility_factor:.6f}</td>
       <td>{_severity_chip(ar.nbti_delta_vth_v)}</td>
+    </tr>""")
+    raw_rows = []
+    for ar in sorted_pmos:
+        raw_rows.append(f"""
+    <tr>
+      <td class="mono"><b>{ar.name}</b></td>
+      <td class="mono">{ar.nbti_integ_v_s:.4e} В·с</td>
+      <td class="mono">{ar.nbti_max_vsg_vdg:.4e} В²</td>
     </tr>""")
     return f"""
   <h2>Температурная нестабильность при отрицательном смещении (NBTI) <span class="badge pmos-badge">PMOS</span></h2>
@@ -241,7 +312,23 @@ def _build_nbti_section(results: AgingResults) -> str:
     </thead>
     <tbody>{''.join(rows)}
     </tbody>
-  </table>"""
+  </table>
+  <details style="margin-bottom:24px">
+    <summary style="cursor:pointer;color:var(--muted);font-size:0.85rem;padding:4px 0">
+      Данные из LTspice (исходные измерения)
+    </summary>
+    <table style="margin-top:8px">
+      <thead>
+        <tr>
+          <th>Транзистор</th>
+          <th>∫ |Vsg| dt</th>
+          <th>max(Vsg · Vdg)</th>
+        </tr>
+      </thead>
+      <tbody>{''.join(raw_rows)}
+      </tbody>
+    </table>
+  </details>"""
 
 
 def _fmt_sim_time(s: float) -> str:
@@ -377,7 +464,7 @@ _TEMP_HTML_TEMPLATE = """\
 <body>
 <div class="container">
   <h1>Температурный анализ деградации МОП-транзисторов</h1>
-  <p class="subtitle">Сформирован {date} · Срок службы: {years} лет</p>
+  <p class="subtitle">Сформирован {date} · Время наработки: {years} лет</p>
 
   <div class="meta-grid">
     <div class="meta-card">
@@ -495,7 +582,7 @@ def generate_temp_html_report(
     Parameters
     ----------
     comparisons  : list[TemperatureComparisonResult]
-    target_years : срок службы (лет)
+    target_years : время наработки (лет)
     output_path  : полный путь к выходному HTML-файлу
 
     Returns
@@ -539,15 +626,19 @@ def generate_html_report(
     results: AgingResults,
     target_years: float,
     output_path: str | Path,
+    supply_voltage_v: Optional[float] = None,
 ) -> Path:
     """Записывает HTML-отчёт и возвращает путь к файлу."""
     output_path = Path(output_path)
+
+    supply_str = f"{supply_voltage_v:g} В" if supply_voltage_v is not None else "—"
 
     html = _HTML_TEMPLATE.format(
         date=datetime.now().strftime("%d.%m.%Y %H:%M"),
         years=int(target_years),
         temp_c=int(results.temperature_c),
         temp_k=int(results.temperature_k),
+        supply_voltage=supply_str,
         sim_time=_fmt_sim_time(results.sim_time_s),
         n_nmos=len(results.nmos_results()),
         n_pmos=len(results.pmos_results()),

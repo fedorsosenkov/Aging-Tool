@@ -38,7 +38,7 @@ def export_to_csv(results: AgingResults, base_dir: str | Path, target_years: flo
     ----------
     results     : AgingResults — результаты расчёта старения
     base_dir    : папка, в которой будет создана подпапка exports/
-    target_years: срок службы (лет) — записывается в заголовок
+    target_years: время наработки (лет) — записывается в заголовок
 
     Returns
     -------
@@ -98,7 +98,7 @@ def export_to_txt(results: AgingResults, base_dir: str | Path, target_years: flo
     ----------
     results     : AgingResults
     base_dir    : папка, в которой будет создана подпапка exports/
-    target_years: срок службы (лет)
+    target_years: время наработки (лет)
 
     Returns
     -------
@@ -114,7 +114,7 @@ def export_to_txt(results: AgingResults, base_dir: str | Path, target_years: flo
     lines.append("  MOS Aging Analyzer — Результаты анализа старения")
     lines.append(sep)
     lines.append(f"  Дата:              {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}")
-    lines.append(f"  Срок службы:       {target_years:.0f} лет")
+    lines.append(f"  Время наработки:       {target_years:.0f} лет")
     lines.append(f"  Температура:       {results.temperature_c:.1f} °C  /  {results.temperature_k:.1f} K")
     lines.append(f"  Время симуляции:   {results.sim_time_s:.4e} с")
     lines.append(f"  Транзисторов:      {len(results.transistors)}"
@@ -181,7 +181,7 @@ def export_temp_to_csv(
     ----------
     comparisons  : list[TemperatureComparisonResult]
     base_dir     : папка, в которой будет создана подпапка exports/
-    target_years : срок службы (лет)
+    target_years : время наработки (лет)
 
     Returns
     -------
@@ -247,7 +247,7 @@ def export_temp_to_txt(
     ----------
     comparisons  : list[TemperatureComparisonResult]
     base_dir     : папка, в которой будет создана подпапка exports/
-    target_years : срок службы (лет)
+    target_years : время наработки (лет)
 
     Returns
     -------
@@ -270,7 +270,7 @@ def export_temp_to_txt(
     lines.append("  MOS Aging Analyzer — Температурный анализ деградации")
     lines.append(sep)
     lines.append(f"  Дата:              {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}")
-    lines.append(f"  Срок службы:       {target_years:.0f} лет")
+    lines.append(f"  Время наработки:       {target_years:.0f} лет")
     lines.append(f"  T₀ (базовая):      {t0:.1f} °C  ({273 + t0:.1f} К)")
     lines.append(f"  T_new (новая):     {tnew:.1f} °C  ({273 + tnew:.1f} К)")
     lines.append(sep)
@@ -319,7 +319,7 @@ def export_temp_to_txt(
     lines.append("")
     lines.append(sep)
     lines.append("  Обозначения:")
-    lines.append("    ΔVth (мВ) — сдвиг порогового напряжения за срок службы")
+    lines.append("    ΔVth (мВ) — сдвиг порогового напряжения за время наработки")
     lines.append("    μ         — коэффициент деградации подвижности (u0_aged = u0 / μ)")
     lines.append("    Δ         — изменение при переходе T₀ → T_new")
     lines.append("    Свежий    — транзистор без деградации (ΔVth=0, μ=1.0)")

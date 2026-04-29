@@ -222,7 +222,7 @@ def write_temp_comparison_log(
     lines.append("=" * 80)
     lines.append("  Сравнение результатов старения при разных температурах")
     lines.append("=" * 80)
-    lines.append(f"  Срок службы: {target_years:.0f} лет")
+    lines.append(f"  Время наработки: {target_years:.0f} лет")
     lines.append(f"  T0   = {t0:>6.1f} °C  ({273 + t0:.1f} К)  — базовая (из log-файла)")
     lines.append(f"  T_new = {t_new:>6.1f} °C  ({273 + t_new:.1f} К)  — новая")
     lines.append("=" * 80)
@@ -260,7 +260,7 @@ def write_temp_comparison_log(
     lines.append("")
     lines.append("Обозначения:")
     lines.append(
-        "  ΔVth  — сдвиг порогового напряжения за срок службы (мВ)"
+        "  ΔVth  — сдвиг порогового напряжения за время наработки (мВ)"
     )
     lines.append(
         "  μ     — коэффициент деградации подвижности (u0_aged = u0 / μ)"

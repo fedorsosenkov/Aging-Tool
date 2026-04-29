@@ -634,7 +634,7 @@ class MainWindow(QMainWindow):
         btn_params = QPushButton("⚙️  Параметры расчёта…")
         btn_params.setObjectName("secondaryBtn")
         btn_params.clicked.connect(self._open_params_dialog)
-        self._lbl_params = QLabel(f"Срок службы: 10 лет  |  |Vth| PMOS: 0.400 В")
+        self._lbl_params = QLabel(f"Время наработки: 10 лет  |  |Vth| PMOS: 0.400 В")
         self._lbl_params.setStyleSheet("color: #64748b; font-size: 12px;")
 
         p_row = QHBoxLayout()
@@ -983,7 +983,7 @@ class MainWindow(QMainWindow):
         if dlg.exec():
             self._aging_params = (dlg.years, dlg.vth_pmos)
             self._lbl_params.setText(
-                f"Срок службы: {int(dlg.years)} лет  |  |Vth| PMOS: {dlg.vth_pmos:.3f} В"
+                f"Время наработки: {int(dlg.years)} лет  |  |Vth| PMOS: {dlg.vth_pmos:.3f} В"
             )
             self._log(f"⚙️ Параметры: {int(dlg.years)} лет, Vth={dlg.vth_pmos:.3f} В")
 
@@ -1052,7 +1052,9 @@ class MainWindow(QMainWindow):
 
         # Сохраняем HTML-отчёт
         report_path = self._schema_dir / "aging_report.html"
-        generate_html_report(results, self._aging_params[0], report_path)
+        supply_v = self._netlist.supply_voltage_v if self._netlist else None
+        generate_html_report(results, self._aging_params[0], report_path,
+                             supply_voltage_v=supply_v)
         self._report_path = report_path
         self._log(f"📄 Отчёт сохранён: {report_path}")
 

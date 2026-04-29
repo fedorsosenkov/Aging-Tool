@@ -45,6 +45,7 @@ class NetlistData:
     transistors: list[Transistor] = field(default_factory=list)
     tox_nmos: Optional[float] = None          # толщина оксида затвора NMOS (м)
     tox_pmos: Optional[float] = None          # толщина оксида затвора PMOS (м)
+    supply_voltage_v: Optional[float] = None  # напряжение питания (В)
 
 
 @dataclass
@@ -205,6 +206,44 @@ def _parse_tox(lines: list[str]) -> tuple[Optional[float], Optional[float]]:
     return tox_n, tox_p
 
 
+def _parse_supply_voltage(lines: list[str]) -> Optional[float]:
+    """
+    Ищет напряжение питания в netlist.
+
+    Поддерживаемые форматы источников напряжения:
+      Vdd VDD 0 1.8
+      V1  VDD 0 DC 1.8
+      Vcc net 0 1.2
+
+    Берёт максимальное положительное DC-напряжение среди всех источников,
+    один из узлов которых — земля (0 / gnd / vss).
+    """
+    _GROUND = {"0", "gnd", "vss", "agnd", "dgnd"}
+    candidates: list[float] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped[0] not in ("V", "v"):
+            continue
+        tokens = stripped.split()
+        if len(tokens) < 4:
+            continue
+        node_p, node_n = tokens[1].lower(), tokens[2].lower()
+        if node_p not in _GROUND and node_n not in _GROUND:
+            continue  # ни один узел не земля — пропускаем
+
+        # Ищем числовое значение: следующий токен после необязательного "DC"
+        val_tokens = [t for t in tokens[3:] if t.upper() not in ("DC", "AC")]
+        if not val_tokens:
+            continue
+        try:
+            v = parse_spice_value(val_tokens[0])
+            if v > 0:
+                candidates.append(v)
+        except ValueError:
+            pass
+    return max(candidates) if candidates else None
+
+
 def parse_netlist(path: str | Path) -> NetlistData:
     """Читает netlist и возвращает структурированные данные."""
     lines = read_lines(path)
@@ -222,6 +261,7 @@ def parse_netlist(path: str | Path) -> NetlistData:
                 transistors.append(t)
 
     tox_n, tox_p = _parse_tox(lines)
+    supply_v = _parse_supply_voltage(lines)
 
     return NetlistData(
         lines=lines,
@@ -229,6 +269,7 @@ def parse_netlist(path: str | Path) -> NetlistData:
         transistors=transistors,
         tox_nmos=tox_n,
         tox_pmos=tox_p,
+        supply_voltage_v=supply_v,
     )
 
 
@@ -335,14 +376,14 @@ def generate_inc_lines(transistors: list[Transistor]) -> list[str]:
             if length_nm <= 0:
                 continue
             lines += [
-                f"B{num}Ib 0 N{num}Ib I=(1e-5)*Id({t.name})"
+                f"B{num}Ib 0 N{num}Ib I=(1e-5)*abs(Id({t.name}))"
                 f"*pwr((1/{length_nm}), 2.5)"
                 f"*exp(5.7*(V({t.drain})-V({t.source})))"
                 f"*exp(-1.21*(V({t.drain})-V({t.gate})))",
                 f"R{num}Ib N{num}Ib 0 1",
                 f".measure tran HCI_{t.name} integ I(B{num}Ib)",
                 f".measure tran maxHCI_{t.name} max I(B{num}Ib)",
-                f".measure tran maxId_{t.name} max Id({t.name})",
+                f".measure tran maxId_{t.name} max abs(Id({t.name}))",
             ]
         elif t.is_pmos:
             # Оригинальная формула el_read(): измеряем Vsg*Vdg и ∫|Vsg|=∫|Vgs|

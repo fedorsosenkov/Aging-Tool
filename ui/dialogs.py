@@ -14,7 +14,7 @@ from PyQt6.QtGui import QFont
 class AgingParamsDialog(QDialog):
     """
     Диалог ввода параметров расчёта старения:
-    - срок службы (лет)
+    - время наработки (лет)
     - пороговое напряжение PMOS для NBTI (В)
     """
 
@@ -37,7 +37,7 @@ class AgingParamsDialog(QDialog):
         layout.addWidget(title)
 
         hint = QLabel(
-            "Введите срок службы и пороговое напряжение PMOS-транзисторов.\n"
+            "Введите время наработки и пороговое напряжение PMOS-транзисторов.\n"
             "Для технологии 32 нм используйте значение по умолчанию (0.4 В).\n"
             "Для L ≥ 100 нм: Vth = VTH0 + 0.05. Для L = 50 нм: Vth = 0.47."
         )
@@ -52,7 +52,7 @@ class AgingParamsDialog(QDialog):
         self._years_spin.setRange(1, 50)
         self._years_spin.setValue(10)
         self._years_spin.setSuffix(" лет")
-        form.addRow("Срок службы:", self._years_spin)
+        form.addRow("Время наработки:", self._years_spin)
 
         self._vth_spin = QDoubleSpinBox()
         self._vth_spin.setRange(0.01, 2.0)
