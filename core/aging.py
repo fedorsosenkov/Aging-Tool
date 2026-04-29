@@ -40,6 +40,7 @@ class TransistorAgingResult:
     nbti_ratio: float = 0.0       # доля времени в режиме NBTI
     nbti_delta_vth_v: float = 0.0 # сдвиг порогового напряжения
     nbti_mobility_factor: float = 1.0  # знаменатель для u0
+    nbti_n_it_m2: float = 0.0     # концентрация интерфейсных ловушек [м⁻²]
     # Сырые данные из LTspice (NBTI)
     nbti_integ_v_s: float = 0.0   # ∫ |Vsg| dt  [В·с]
     nbti_max_vsg_vdg: float = 0.0 # max(Vsg·Vdg) [В²]
@@ -49,6 +50,7 @@ class TransistorAgingResult:
     hci_ratio: float = 0.0
     hci_delta_vth_v: float = 0.0
     hci_mobility_factor: float = 1.0
+    hci_n_it_m2: float = 0.0      # концентрация интерфейсных ловушек [м⁻²]
     # Сырые данные из LTspice (HCI)
     hci_integ_a_s: float = 0.0    # ∫ I_hci dt  [А·с]
     hci_max_hci_a: float = 0.0    # max I_hci   [А]
@@ -105,6 +107,7 @@ def calculate_nbti(
     tox_pmos: float,
     vth_pmos: float,
     target_years: float,
+    sigma_mobility: float = 0.24e-16,
 ) -> TransistorAgingResult:
     """
     Рассчитывает деградацию PMOS-транзистора по модели NBTI.
@@ -142,12 +145,14 @@ def calculate_nbti(
     delta_vth = 0.7 * (raw ** (2 * n_exp)) if raw > 0 else 0.0
 
     eps_ox = _EPSILON_SI02 * _EPSILON_0
-    mobility_factor = 1 + (0.24e-16) * ((delta_vth * eps_ox / tox_pmos) / _Q_ELECTRON)
+    n_it = delta_vth * eps_ox / (tox_pmos * _Q_ELECTRON)
+    mobility_factor = 1 + sigma_mobility * n_it
 
     result.nbti_active_time_s = active_time
     result.nbti_ratio = ratio
     result.nbti_delta_vth_v = delta_vth
     result.nbti_mobility_factor = mobility_factor
+    result.nbti_n_it_m2 = n_it
     result.nbti_integ_v_s = integ_val
     result.nbti_max_vsg_vdg = max_val
     return result
@@ -162,6 +167,8 @@ def calculate_hci(
     log: LogData,
     tox_nmos: float,
     target_years: float,
+    n_hci: float = 0.27,
+    sigma_mobility: float = 0.24e-16,
 ) -> TransistorAgingResult:
     """
     Рассчитывает деградацию NMOS-транзистора по модели HCI.
@@ -174,7 +181,7 @@ def calculate_hci(
     years_s = _SECONDS_PER_YEAR * target_years
     c22 = 0.22
     m_exp = 2
-    n_exp = 0.27
+    n_exp = n_hci
 
     name_lower = transistor.name.lower()
     key_integ  = f"hci_{name_lower}"
@@ -207,12 +214,14 @@ def calculate_hci(
     ) ** n_exp
 
     eps_ox = _EPSILON_SI02 * _EPSILON_0
-    mobility_factor = 1 + (0.24e-16) * ((delta_vth * eps_ox / tox_nmos) / _Q_ELECTRON)
+    n_it = delta_vth * eps_ox / (tox_nmos * _Q_ELECTRON)
+    mobility_factor = 1 + sigma_mobility * n_it
 
     result.hci_active_time_s = active_time
     result.hci_ratio = ratio
     result.hci_delta_vth_v = delta_vth
     result.hci_mobility_factor = mobility_factor
+    result.hci_n_it_m2 = n_it
     result.hci_integ_a_s = integ_val
     result.hci_max_hci_a = max_hci
     result.hci_max_id_a = max_id
@@ -232,6 +241,8 @@ def run_aging_analysis(
     vth_pmos: float,
     target_years: float,
     supply_voltage_v: float | None = None,
+    n_hci: float = 0.27,
+    sigma_mobility: float = 0.24e-16,
 ) -> AgingResults:
     """
     Запускает расчёт старения для всех выбранных транзисторов.
@@ -250,9 +261,9 @@ def run_aging_analysis(
         if t is None:
             continue
         if t.is_pmos:
-            res = calculate_nbti(t, log, tox_pmos, vth_pmos, target_years)
+            res = calculate_nbti(t, log, tox_pmos, vth_pmos, target_years, sigma_mobility)
         else:
-            res = calculate_hci(t, log, tox_nmos, target_years)
+            res = calculate_hci(t, log, tox_nmos, target_years, n_hci, sigma_mobility)
         results.transistors.append(res)
 
     return results

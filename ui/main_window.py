@@ -272,6 +272,8 @@ class AnalysisWorker(QThread):
         vth_pmos: float,
         first_measure: str,
         n_measures: int,
+        n_hci: float = 0.27,
+        sigma_mobility: float = 0.24e-16,
     ) -> None:
         super().__init__()
         self.signals = WorkerSignals()
@@ -282,6 +284,8 @@ class AnalysisWorker(QThread):
         self._vth_pmos = vth_pmos
         self._first_measure = first_measure
         self._n_measures = n_measures
+        self._n_hci = n_hci
+        self._sigma_mobility = sigma_mobility
 
     def run(self) -> None:
         try:
@@ -294,6 +298,8 @@ class AnalysisWorker(QThread):
                 tox_pmos=self._netlist.tox_pmos or 3.9e-9,
                 vth_pmos=self._vth_pmos,
                 target_years=self._years,
+                n_hci=self._n_hci,
+                sigma_mobility=self._sigma_mobility,
             )
             self.signals.finished.emit(results)
         except Exception as exc:
@@ -317,7 +323,7 @@ class MainWindow(QMainWindow):
         self._netlist_path: Path | None = None
         self._chosen_transistors: list[str] = []
         self._aging_results: AgingResults | None = None
-        self._aging_params: tuple[float, float] = (10.0, 0.4)  # (years, vth_pmos)
+        self._aging_params: tuple = (10.0, 0.4, 0.27, 0.24e-16)  # (years, vth_pmos, n_hci, sigma)
         self._report_path: Path | None = None
         self._worker: AnalysisWorker | None = None
         # Log-данные сохраняются для повторного расчёта при другой температуре
@@ -980,12 +986,18 @@ class MainWindow(QMainWindow):
         dlg = AgingParamsDialog(self)
         dlg._years_spin.setValue(int(self._aging_params[0]))
         dlg._vth_spin.setValue(self._aging_params[1])
+        dlg._n_hci_spin.setValue(self._aging_params[2])
+        dlg._sigma_spin.setValue(self._aging_params[3] / 1e-16)
         if dlg.exec():
-            self._aging_params = (dlg.years, dlg.vth_pmos)
+            self._aging_params = (dlg.years, dlg.vth_pmos, dlg.n_hci, dlg.sigma_mobility)
             self._lbl_params.setText(
                 f"Время наработки: {int(dlg.years)} лет  |  |Vth| PMOS: {dlg.vth_pmos:.3f} В"
+                f"  |  n={dlg.n_hci:.2f}  |  σ={dlg.sigma_mobility / 1e-16:.2f}×10⁻¹⁶"
             )
-            self._log(f"⚙️ Параметры: {int(dlg.years)} лет, Vth={dlg.vth_pmos:.3f} В")
+            self._log(
+                f"⚙️ Параметры: {int(dlg.years)} лет, Vth={dlg.vth_pmos:.3f} В, "
+                f"n_hci={dlg.n_hci:.2f}, σ={dlg.sigma_mobility:.2e}"
+            )
 
     def _run_analysis(self) -> None:
         if not self._log_path:
@@ -1008,7 +1020,7 @@ class MainWindow(QMainWindow):
             first_measure = f"maxnbti{first_t.name.lower()}"
             n_measures = len(self._chosen_transistors) * 2
 
-        years, vth_pmos = self._aging_params
+        years, vth_pmos, n_hci, sigma = self._aging_params
         self._calc_progress.setVisible(True)
         self._btn_calculate.setEnabled(False)
         self._log("🔍 Запускаю расчёт старения…")
@@ -1021,6 +1033,8 @@ class MainWindow(QMainWindow):
             vth_pmos=vth_pmos,
             first_measure=first_measure,
             n_measures=n_measures,
+            n_hci=n_hci,
+            sigma_mobility=sigma,
         )
         self._worker.signals.finished.connect(self._on_analysis_done)
         self._worker.signals.error.connect(self._on_analysis_error)

@@ -21,7 +21,7 @@ class AgingParamsDialog(QDialog):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Параметры расчёта")
-        self.setMinimumWidth(400)
+        self.setMinimumWidth(440)
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -62,6 +62,21 @@ class AgingParamsDialog(QDialog):
         self._vth_spin.setSuffix(" В")
         form.addRow("|Vth| PMOS:", self._vth_spin)
 
+        self._n_hci_spin = QDoubleSpinBox()
+        self._n_hci_spin.setRange(0.10, 0.90)
+        self._n_hci_spin.setSingleStep(0.01)
+        self._n_hci_spin.setDecimals(2)
+        self._n_hci_spin.setValue(0.27)
+        form.addRow("Показатель HCI по времени (n):", self._n_hci_spin)
+
+        self._sigma_spin = QDoubleSpinBox()
+        self._sigma_spin.setRange(0.01, 10.0)
+        self._sigma_spin.setSingleStep(0.01)
+        self._sigma_spin.setDecimals(2)
+        self._sigma_spin.setValue(0.24)
+        self._sigma_spin.setSuffix(" × 10⁻¹⁶ м²")
+        form.addRow("Коэф. деградации подвижности σ:", self._sigma_spin)
+
         layout.addLayout(form)
 
         buttons = QDialogButtonBox(
@@ -78,6 +93,14 @@ class AgingParamsDialog(QDialog):
     @property
     def vth_pmos(self) -> float:
         return self._vth_spin.value()
+
+    @property
+    def n_hci(self) -> float:
+        return self._n_hci_spin.value()
+
+    @property
+    def sigma_mobility(self) -> float:
+        return self._sigma_spin.value() * 1e-16
 
 
 class TemperatureDialog(QDialog):

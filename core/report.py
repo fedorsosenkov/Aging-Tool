@@ -226,6 +226,7 @@ def _build_hci_section(results: AgingResults) -> str:
       <td>{_fmt_time(ar.hci_active_time_s)}</td>
       <td>{ar.hci_ratio:.4e}</td>
       <td class="mono">{_fmt_voltage(ar.hci_delta_vth_v)}</td>
+      <td class="mono">{ar.hci_n_it_m2:.3e}</td>
       <td class="mono">{ar.hci_mobility_factor:.6f}</td>
       <td>{_severity_chip(ar.hci_delta_vth_v)}</td>
     </tr>""")
@@ -247,6 +248,7 @@ def _build_hci_section(results: AgingResults) -> str:
         <th>Время в режиме HCI</th>
         <th>Отношение времени работы в режиме HCI ко времени моделирования</th>
         <th>ΔVth</th>
+        <th>N_it (м⁻²)</th>
         <th>Коэф. подвижности (÷u0)</th>
         <th>Степень деградации</th>
       </tr>
@@ -286,6 +288,7 @@ def _build_nbti_section(results: AgingResults) -> str:
       <td>{_fmt_time(ar.nbti_active_time_s)}</td>
       <td>{ar.nbti_ratio:.4f}</td>
       <td class="mono">{_fmt_voltage(ar.nbti_delta_vth_v)}</td>
+      <td class="mono">{ar.nbti_n_it_m2:.3e}</td>
       <td class="mono">{ar.nbti_mobility_factor:.6f}</td>
       <td>{_severity_chip(ar.nbti_delta_vth_v)}</td>
     </tr>""")
@@ -306,6 +309,7 @@ def _build_nbti_section(results: AgingResults) -> str:
         <th>Время в режиме NBTI</th>
         <th>Отношение времени работы в режиме NBTI ко времени моделирования</th>
         <th>ΔVth</th>
+        <th>N_it (м⁻²)</th>
         <th>Коэф. подвижности (÷u0)</th>
         <th>Степень деградации</th>
       </tr>
