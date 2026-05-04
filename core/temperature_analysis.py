@@ -74,7 +74,12 @@ def _hci_temp_factor(kelvin: float) -> float:
     """
     Аррениусовский температурный коэффициент для HCI.
     Формула из оригинального кода: 10 * exp(-Ea / (k * T)).
-    Модифицирует интегральное значение тока substrate-инжекции.
+
+    Физический смысл: при росте T фононное рассеяние усиливается,
+    длина свободного пробега λ уменьшается → горячих носителей меньше →
+    деградация HCI УМЕНЬШАЕТСЯ.
+    Коэффициент растёт с T, поэтому коррекция вычисляется как
+    factor(T₀) / factor(T_new): при T_new > T₀ отношение < 1.
     """
     return 10.0 * math.exp(-_Ea_HCI / (_K_BOLTZMANN * kelvin))
 
@@ -87,10 +92,21 @@ def _recalculate_pmos_at_temp(
     target_years: float,
     new_temp_c: float,
 ) -> TransistorAgingResult:
-    """Пересчитывает NBTI-деградацию PMOS при новой температуре."""
+    """
+    Пересчитывает NBTI-деградацию PMOS при новой температуре.
+
+    Ограничение модели (L1): используется только R-D компонента (Ea ≈ 0.49 эВ),
+    компонента захвата дырок (Ea ≈ 0.10 эВ) не учитывается.
+    Из-за этого температурная чувствительность завышена: модель даёт ~+85 %
+    при 100 °C vs 27 °C, тогда как эксперименты показывают ~30–40 %.
+    Для более точного результата необходимо двухкомпонентное NBTI-уравнение
+    (Ma 2013, Wang 2022).
+    """
     log_new = deepcopy(log)
     log_new.temperature_c = new_temp_c
-    return calculate_nbti(transistor, log_new, tox_pmos, vth_pmos, target_years)
+    # Предпочитаем vth0 из .model блока; vth_pmos — только резерв
+    vth_use = abs(transistor.vth0) if transistor.vth0 is not None else vth_pmos
+    return calculate_nbti(transistor, log_new, tox_pmos, vth_use, target_years)
 
 
 def _recalculate_nmos_at_temp(
@@ -102,7 +118,14 @@ def _recalculate_nmos_at_temp(
 ) -> TransistorAgingResult:
     """
     Пересчитывает HCI-деградацию NMOS при новой температуре.
-    Применяет аррениусовскую поправку к интегральному значению тока.
+
+    Физика: при росте T фононное рассеяние усиливается → λ уменьшается →
+    горячих носителей меньше → HCI УМЕНЬШАЕТСЯ.
+
+    Поправка: correction = factor(T₀) / factor(T_new).
+    При T_new > T₀: factor(T_new) > factor(T₀) → correction < 1 → интеграл тока
+    уменьшается → ΔVth_HCI уменьшается (правильное физическое поведение).
+    При T_new = T₀: correction = 1 (без изменений, согласованность с базовым расчётом).
     """
     name_lower = transistor.name.lower()
     key_integ = f"hci_{name_lower}"
@@ -111,15 +134,19 @@ def _recalculate_nmos_at_temp(
     if meas_integ is None or log.sim_time_s == 0:
         return calculate_hci(transistor, log, tox_nmos, target_years)
 
+    kelvin_t0  = 273.0 + log.temperature_c
     kelvin_new = 273.0 + new_temp_c
-    factor = _hci_temp_factor(kelvin_new)
+    factor_t0  = _hci_temp_factor(kelvin_t0)
+    factor_new = _hci_temp_factor(kelvin_new)
+    # correction < 1 при T_new > T₀ → HCI деградация снижается с ростом T
+    correction = factor_t0 / factor_new
 
     # Создаём копию LogData с поправленным integ-значением
     log_new = deepcopy(log)
     old_val = meas_integ.value
     log_new.measurements[key_integ] = LogMeasurement(
         name=key_integ,
-        value=old_val * factor,
+        value=old_val * correction,
         time_start=meas_integ.time_start,
         time_end=meas_integ.time_end,
     )
@@ -269,10 +296,13 @@ def write_temp_comparison_log(
         "  Δ     — изменение при переходе T0 → T_new"
     )
     lines.append(
-        "  NMOS: температурная поправка HCI по формуле Аррениуса."
+        "  NMOS: HCI снижается с ростом T (фононное рассеяние); поправка factor(T₀)/factor(T_new)."
     )
     lines.append(
-        "  PMOS: температурная поправка NBTI через коэффициент Kv(T)."
+        "  PMOS: NBTI растёт с ростом T через Kv(T); R-D модель даёт ~+85% при 100°C vs 27°C"
+    )
+    lines.append(
+        "        (лит. ~30-40%); завышение связано с отсутствием компоненты захвата дырок."
     )
 
     output_path.write_text("\n".join(lines), encoding="utf-8")

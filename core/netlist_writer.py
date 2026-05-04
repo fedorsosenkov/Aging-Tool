@@ -5,9 +5,10 @@
 Логика (netlist):
   1. Копируем netlist построчно.
   2. Строку .lib заменяем так, чтобы она ссылалась на models_aged.txt.
-  3. Строки транзисторов (M...) получают новое имя модели (NMOS1, PMOS2, …).
-  4. Строки .model* записываем ТОЛЬКО в models_aged.txt с исправленными
-     параметрами vth0 и u0.
+  3. Строки транзисторов (M...) получают новое имя модели (M1_AGED, MP2_AGED, …).
+  4. Строки .model* записываем ТОЛЬКО в models_aged.txt — исходную модель
+     без изменений (для недеградировавших транзисторов) плюс по одному блоку
+     на каждый деградировавший транзистор с точными значениями vth0 и u0.
 
 Логика (asc):
   1. Читаем .asc построчно.
@@ -19,7 +20,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from core.aging import AgingResults, vth_category
+from core.aging import AgingResults
 from core.netlist_parser import NetlistData, Transistor
 from utils.file_io import write_text
 
@@ -27,17 +28,6 @@ from utils.file_io import write_text
 # ---------------------------------------------------------------------------
 # Вспомогательные функции
 # ---------------------------------------------------------------------------
-
-def _aged_model_name(base_model: str, category: int) -> str:
-    """NMOS → NMOS1 (или NMOS если category==0)."""
-    if category == 0:
-        return base_model
-    return base_model.rstrip("0123456789") + str(category)
-
-
-def _vth_multiplier(category: int) -> float:
-    return {1: 1.0125, 2: 1.0375, 3: 1.0625}.get(category, 1.0)
-
 
 def _find_token_index(tokens: list[str], keyword: str) -> int:
     """Ищет индекс токена, содержащего keyword (без учёта регистра)."""
@@ -63,20 +53,29 @@ def _replace_param_in_line(line: str, keyword: str, new_value: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Построение карты «имя транзистора → (новая модель, категория)»
+# Построение карты «имя транзистора → (новая модель, vth_mul, mob_factor)»
 # ---------------------------------------------------------------------------
 
 def _build_transistor_model_map(
     netlist: NetlistData,
     aging: AgingResults,
     chosen_names: list[str],
-) -> dict[str, tuple[str, int]]:
+) -> dict[str, tuple[str, float, float]]:
     """
-    Возвращает: {transistor_name: (new_model_name, category)}
-    Например: {"M1": ("NMOS2", 2), "M4": ("PMOS1", 1)}
+    Возвращает: {transistor_name: (new_model_name, vth_multiplier, mobility_factor)}
+
+    Для каждого деградировавшего транзистора создаётся уникальное имя модели
+    вида «{ИМЯ}_AGED» (например, M1_AGED, MP2_AGED).
+
+    Транзисторы без деградации (delta_vth == 0) оставляют оригинальное имя модели.
+
+    vth_multiplier = (typical_vth + delta_vth) / typical_vth
+        — точный коэффициент для каждого транзистора (не квантованный).
+    mobility_factor = 1 + σ·N_it
+        — точное значение из расчёта.
     """
     chosen_upper = {n.upper() for n in chosen_names}
-    result: dict[str, tuple[str, int]] = {}
+    result: dict[str, tuple[str, float, float]] = {}
 
     for t in netlist.transistors:
         if t.name not in chosen_upper:
@@ -85,28 +84,22 @@ def _build_transistor_model_map(
         if ar is None:
             continue
 
-        base = t.model.upper()  # NMOS / PMOS / CMOSN / CMOSP
-
         if t.is_nmos:
-            if ar.hci_delta_vth_v == 0:
-                result[t.name] = (base, 0)
-                continue
-            # vth сдвигается вверх для NMOS
-            # ищем vth в оригинальной модели через tox — у нас нет прямого доступа,
-            # поэтому оцениваем категорию через delta / типичное значение 0.4 В
-            typical_vth = 0.4
-            ratio = (typical_vth + ar.hci_delta_vth_v) / typical_vth
-            cat = vth_category(ratio)
-            result[t.name] = (_aged_model_name(base, cat), cat)
+            delta = ar.hci_delta_vth_v
+            mob   = ar.hci_mobility_factor
+        else:
+            delta = ar.nbti_delta_vth_v
+            mob   = ar.nbti_mobility_factor
 
-        elif t.is_pmos:
-            if ar.nbti_delta_vth_v == 0:
-                result[t.name] = (base, 0)
-                continue
-            typical_vth = -0.4
-            ratio = (typical_vth - ar.nbti_delta_vth_v) / typical_vth
-            cat = vth_category(ratio)
-            result[t.name] = (_aged_model_name(base, cat), cat)
+        if delta == 0:
+            # Деградации нет — оставляем оригинальное имя модели
+            result[t.name] = (t.model.upper(), 1.0, 1.0)
+        else:
+            new_name = f"{t.name}_AGED"
+            # Используем реальный vth0 из .model блока; 0.4 В — крайний резерв
+            vth_ref  = abs(t.vth0) if t.vth0 is not None else 0.4
+            vth_mul  = (vth_ref + delta) / vth_ref
+            result[t.name] = (new_name, vth_mul, mob)
 
     return result
 
@@ -125,127 +118,141 @@ def write_aged_netlist(
     """
     Создаёт постаревший netlist и файл моделей.
 
+    Для каждого деградировавшего транзистора генерируется **индивидуальная**
+    .model-запись с точными vth0 и u0 (без усреднения по категориям).
+
     Returns
     -------
     (aged_cir_path, models_path)
     """
-    source = Path(source_cir_path)
+    source  = Path(source_cir_path)
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    aged_cir  = out_dir / (source.stem + "_aged.cir")
+    aged_cir   = out_dir / (source.stem + "_aged.cir")
     models_txt = out_dir / "models_aged.txt"
 
     model_map = _build_transistor_model_map(netlist, aging, chosen_names)
 
-    # Карта: base_model_upper → {cat → new_name}
-    # Нужна чтобы при обработке .model знать все варианты имён
-    unique_categories: dict[str, set[int]] = {}
-    for tname, (new_model, cat) in model_map.items():
-        t = next((x for x in netlist.transistors if x.name == tname), None)
-        if t is None:
-            continue
-        base = t.model.upper()
-        unique_categories.setdefault(base, set()).add(cat)
-
-    # Соответствие транзистор → mobility_factor
-    mobility_map: dict[str, float] = {}
-    for ar in aging.transistors:
-        if ar.channel == "NMOS":
-            mobility_map[ar.name] = ar.hci_mobility_factor
-        else:
-            mobility_map[ar.name] = ar.nbti_mobility_factor
-
     # --- Обходим строки netlist ---
-    cir_lines: list[str] = []
+    cir_lines:     list[str] = []
     models_blocks: list[str] = []
-    in_model_block = False
-    current_base_model = ""
+
+    in_model_block       = False
+    current_base_model   = ""
     current_model_lines: list[str] = []
+    lib_replaced         = False
 
-    lib_replaced = False
+    def _apply_vth_u0(lines: list[str], vth_mul: float, mob_factor: float) -> list[str]:
+        """
+        Применяет vth_mul к vth0 и mob_factor к u0 в блоке .model.
 
-    def flush_model_block():
+        Поддерживает все три формата PTM/BSIM4 (ведущий «+» у первого параметра
+        строки всегда присутствует):
+          1. +vth0=0.52          — знак = слит с именем
+          2. +vth0  =  0.52      — три отдельных токена
+          3. +vth0  =-0.46       — знак = слит со значением (PTM PMOS)
+        """
+        def _scale_param(toks: list[str], name: str, factor: float) -> bool:
+            """
+            Ищет параметр name в списке токенов и умножает его значение на factor.
+            Возвращает True, если замена произошла.
+            """
+            for i, tok in enumerate(toks):
+                clean = tok.lstrip("+")
+                tl = clean.lower()
+                # Точное совпадение имени (не «vth0» внутри «vth0b» и т.п.)
+                if not (tl == name or tl.startswith(name + "=")):
+                    continue
+
+                # Формат 1: name=value
+                if "=" in clean:
+                    try:
+                        key, val_str = clean.split("=", 1)
+                        val = float(val_str)
+                        prefix = tok[: len(tok) - len(clean)]   # сохраняем «+»
+                        toks[i] = prefix + key + "=" + f"{val * factor:.6f}"
+                        return True
+                    except ValueError:
+                        pass
+
+                # Форматы 2 и 3 — значение в следующем токене
+                if i + 1 < len(toks):
+                    nxt = toks[i + 1]
+                    # Формат 2: name  =  value
+                    if nxt == "=" and i + 2 < len(toks):
+                        try:
+                            val = float(toks[i + 2])
+                            toks[i + 2] = f"{val * factor:.6f}"
+                            return True
+                        except ValueError:
+                            pass
+                    # Формат 3: name  =value
+                    if nxt.startswith("=") and len(nxt) > 1:
+                        try:
+                            val = float(nxt[1:])
+                            toks[i + 1] = "=" + f"{val * factor:.6f}"
+                            return True
+                        except ValueError:
+                            pass
+            return False
+
+        out = []
+        for raw in lines:
+            toks = raw.split()
+            changed = False
+            if "vth0" in raw.lower() and vth_mul != 1.0:
+                changed |= _scale_param(toks, "vth0", vth_mul)
+            if "u0" in raw.lower() and mob_factor != 1.0:
+                # mob_factor > 1 → u0 уменьшается → делим (factor = 1/mob_factor)
+                changed |= _scale_param(toks, "u0", 1.0 / mob_factor)
+            out.append(" ".join(toks) if changed else raw)
+        return out
+
+    def flush_model_block() -> None:
         nonlocal current_model_lines, current_base_model
         if not current_model_lines:
             return
         base = current_base_model.upper()
-        cats = unique_categories.get(base, {0})
-        for cat in sorted(cats):
-            new_name = _aged_model_name(base, cat) if cat else base
-            # Первая строка .model с новым именем
-            first = current_model_lines[0]
-            first_new = first.replace(
-                current_base_model, new_name.lower(), 1
-            ).replace(
-                current_base_model.upper(), new_name, 1
+
+        # Транзисторы данного типа модели среди деградировавших
+        degraded = [
+            (tname, new_name, vth_mul, mob)
+            for tname, (new_name, vth_mul, mob) in model_map.items()
+            if new_name != base   # имя изменилось → деградация есть
+            and any(
+                t.model.upper() == base
+                for t in netlist.transistors
+                if t.name == tname
             )
-            block = [first_new]
-            for raw_line in current_model_lines[1:]:
-                line = raw_line
-                if "vth" in line.lower() and cat:
-                    mul = _vth_multiplier(cat)
-                    toks = line.split()
-                    vi = _find_token_index(toks, "vth")
-                    if vi != -1:
-                        tok = toks[vi]
-                        if "=" in tok:
-                            try:
-                                val = float(tok.split("=")[1])
-                                toks[vi] = tok.split("=")[0] + "=" + f"{val * mul:.4f}"
-                                line = " ".join(toks)
-                            except ValueError:
-                                pass
-                if "u0" in line.lower() and cat != 0:
-                    # U0 корректируется индивидуально для каждой категории:
-                    # берём mobility_factor только транзисторов этой категории.
-                    def _same_type(ar: object) -> bool:
-                        ch = getattr(ar, "channel", "")
-                        return (
-                            (ch == "NMOS" and (base.startswith("N") or ("CMOS" in base and "N" in base)))
-                            or (ch == "PMOS" and (base.startswith("P") or ("CMOS" in base and "P" in base)))
-                        )
+        ]
 
-                    # Транзисторы данной категории и данного типа
-                    relevant = [
-                        ar for ar in aging.transistors
-                        if _same_type(ar) and model_map.get(ar.name, (None, -1))[1] == cat
-                    ]
-                    if not relevant:
-                        # Фоллбэк: все транзисторы этого типа
-                        relevant = [ar for ar in aging.transistors if _same_type(ar)]
+        # Всегда записываем исходный блок без изменений (для неизменённых транзисторов
+        # и как «шаблон» для чтения — LTspice может потребовать оригинал)
+        models_blocks.append("\n".join(current_model_lines) + "\n")
 
-                    if relevant:
-                        avg_factor = sum(
-                            ar.hci_mobility_factor if ar.channel == "NMOS"
-                            else ar.nbti_mobility_factor
-                            for ar in relevant
-                        ) / len(relevant)
-                        toks = line.split()
-                        ui = _find_token_index(toks, "u0")
-                        if ui != -1:
-                            tok = toks[ui]
-                            try:
-                                if "=" in tok:
-                                    val = float(tok.split("=")[1])
-                                    toks[ui] = tok.split("=")[0] + "=" + f"{val / avg_factor:.5f}"
-                                elif ui + 1 < len(toks):
-                                    val = float(toks[ui + 1])
-                                    toks[ui + 1] = f"{val / avg_factor:.5f}"
-                                line = " ".join(toks)
-                            except ValueError:
-                                pass
-                block.append(line)
-            models_blocks.append("\n".join(block) + "\n")
+        # Один блок на каждый деградировавший транзистор
+        for tname, new_name, vth_mul, mob_factor in degraded:
+            # Заменяем имя модели в первой строке (.model CMOSN NMOS → .model M1_AGED NMOS)
+            first_new = re.sub(
+                r'(?i)(\.model\s+)\S+',
+                lambda m: m.group(1) + new_name,
+                current_model_lines[0],
+                count=1,
+            )
+            body_modified = _apply_vth_u0(current_model_lines[1:], vth_mul, mob_factor)
+            block_lines = [first_new] + body_modified
+            models_blocks.append("\n".join(block_lines) + "\n")
+
         current_model_lines = []
-        current_base_model = ""
+        current_base_model  = ""
 
     lines = netlist.lines
     i = 0
     while i < len(lines):
-        line = lines[i]
+        line    = lines[i]
         stripped = line.strip()
-        low = stripped.lower()
+        low     = stripped.lower()
 
         # Строка .lib → меняем путь, в cir пишем новый
         if ".lib" in low and not lib_replaced:
@@ -259,11 +266,9 @@ def write_aged_netlist(
         if ".model" in low and ("nmos" in low or "pmos" in low):
             flush_model_block()
             in_model_block = True
-            # Определяем базовое имя модели
             toks = stripped.split()
-            current_base_model = toks[1] if len(toks) > 1 else ""
+            current_base_model  = toks[1] if len(toks) > 1 else ""
             current_model_lines = [stripped]
-            # Не пишем эту строку в cir
             i += 1
             continue
 
@@ -279,13 +284,12 @@ def write_aged_netlist(
 
         # Строка транзистора — заменяем имя модели
         if stripped and stripped[0].upper() == "M" and len(stripped.split()) >= 6:
-            toks = stripped.split()
+            toks  = stripped.split()
             tname = toks[0].upper()
             if tname in model_map:
-                new_model, _ = model_map[tname]
-                # Заменяем токен модели (позиция 5)
+                new_model, _, _ = model_map[tname]
                 old_model = toks[5]
-                toks[5] = new_model if new_model else old_model
+                toks[5]   = new_model if new_model else old_model
                 cir_lines.append(" ".join(toks) + "\n")
                 i += 1
                 continue
@@ -296,7 +300,7 @@ def write_aged_netlist(
     flush_model_block()
 
     # Записываем файлы
-    write_text(aged_cir, "".join(cir_lines))
+    write_text(aged_cir,   "".join(cir_lines))
     write_text(models_txt, "\n".join(models_blocks))
 
     return aged_cir, models_txt
@@ -327,27 +331,26 @@ def create_aged_asc(
     -------
     Path к созданному _aged.asc
     """
-    asc = Path(asc_path)
+    asc     = Path(asc_path)
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     aged_asc = out_dir / (asc.stem + "_aged.asc")
 
     model_map = _build_transistor_model_map(netlist, aging, chosen_names)
     # Ключи приводим к верхнему регистру для сравнения
-    model_map_upper: dict[str, tuple[str, int]] = {
+    model_map_upper: dict[str, tuple[str, float, float]] = {
         k.upper(): v for k, v in model_map.items()
     }
 
-    lib_replaced = False
-    current_inst: str = ""
-
+    lib_replaced  = False
+    current_inst  = ""
     out_lines: list[str] = []
 
     raw_text = asc.read_text(encoding="utf-8", errors="replace")
     for raw_line in raw_text.splitlines(keepends=True):
         stripped = raw_line.rstrip("\r\n")
-        low = stripped.lower()
-        eol = raw_line[len(stripped):]   # "\n" или "\r\n" или ""
+        low      = stripped.lower()
+        eol      = raw_line[len(stripped):]   # "\n" или "\r\n" или ""
 
         # Начало нового блока компонента — сбрасываем InstName
         if low.startswith("symbol "):
@@ -357,7 +360,7 @@ def create_aged_asc(
 
         # Запоминаем имя экземпляра
         if low.startswith("symattr instname "):
-            prefix_len = low.index("symattr instname ") + len("symattr instname ")
+            prefix_len   = low.index("symattr instname ") + len("symattr instname ")
             current_inst = stripped[prefix_len:].strip()
             out_lines.append(raw_line)
             continue
@@ -366,34 +369,32 @@ def create_aged_asc(
         is_value      = low.startswith("symattr value ")
         is_spicemodel = low.startswith("symattr spicemodel ")
         if (is_value or is_spicemodel) and current_inst.upper() in model_map_upper:
-            new_model, _ = model_map_upper[current_inst.upper()]
+            new_model = model_map_upper[current_inst.upper()][0]   # (name, vth_mul, mob)
             if new_model:
                 keyword = "symattr value " if is_value else "symattr spicemodel "
-                idx = low.index(keyword) + len(keyword)
+                idx  = low.index(keyword) + len(keyword)
                 rest = stripped[idx:]
-                # Заменяем только первое слово (имя модели)
                 words = rest.split(None, 1)
                 if words:
-                    tail = (" " + words[1]) if len(words) > 1 else ""
+                    tail    = (" " + words[1]) if len(words) > 1 else ""
                     stripped = stripped[:idx] + new_model + tail
             out_lines.append(stripped + eol)
             continue
 
         # TEXT-строки с .lib → меняем путь на models_aged.txt (первое вхождение)
-        # LTspice использует «!» для SPICE-директив и «;» для комментариев
         if low.startswith("text ") and ".lib" in low and not lib_replaced:
             for prefix_char in ("!", ";"):
                 idx = stripped.find(prefix_char)
                 if idx != -1:
                     text_part = stripped[idx + 1:]
-                    new_text = re.sub(
+                    new_text  = re.sub(
                         r'(\.lib\s+)["\']?[^\s"\']+["\']?',
                         r'\1models_aged.txt',
                         text_part,
                         flags=re.IGNORECASE,
                     )
                     if new_text != text_part:
-                        stripped = stripped[:idx + 1] + new_text
+                        stripped    = stripped[:idx + 1] + new_text
                         lib_replaced = True
                     break
             out_lines.append(stripped + eol)

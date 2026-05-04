@@ -27,6 +27,7 @@ class Transistor:
     length_m: float     # длина канала в метрах
     width_m: float      # ширина канала в метрах
     raw_line: str       # исходная строка из netlist
+    vth0: Optional[float] = None   # пороговое напряжение из .model блока (В)
 
     @property
     def is_nmos(self) -> bool:
@@ -206,6 +207,71 @@ def _parse_tox(lines: list[str]) -> tuple[Optional[float], Optional[float]]:
     return tox_n, tox_p
 
 
+def _parse_vth0_map(lines: list[str]) -> dict[str, float]:
+    """
+    Ищет vth0 в каждом именованном блоке .model и возвращает словарь
+    {MODEL_NAME_UPPER: vth0}.
+
+    Поддерживает все три формата PTM/BSIM4:
+      1. +vth0=0.52             — слитный (знак = внутри токена)
+      2. +vth0  =  0.52         — три отдельных токена
+      3. +vth0  =-0.46          — знак = слит со значением (PTM PMOS)
+    Ведущий «+» у токена-параметра снимается перед сравнением.
+    """
+    result: dict[str, float] = {}
+    current_model: Optional[str] = None
+
+    for line in lines:
+        stripped = line.strip()
+        low = stripped.lower()
+
+        # Начало нового блока .model
+        if ".model" in low and ("nmos" in low or "pmos" in low):
+            toks = stripped.split()
+            current_model = toks[1].upper() if len(toks) > 1 else None
+
+        # Ищем vth0 только внутри активного блока
+        if current_model and "vth0" in low:
+            toks = stripped.split()
+            for i, tok in enumerate(toks):
+                clean = tok.lstrip("+")   # убираем ведущий «+» у параметров
+                tl = clean.lower()
+
+                # Формат 1: vth0=0.52
+                if tl.startswith("vth0") and "=" in clean:
+                    try:
+                        val = _extract_param(clean)
+                        result.setdefault(current_model, val)
+                    except ValueError:
+                        pass
+                    break
+
+                if tl == "vth0" and i + 1 < len(toks):
+                    next_tok = toks[i + 1]
+                    # Формат 2: vth0  =  0.52
+                    if next_tok == "=" and i + 2 < len(toks):
+                        try:
+                            val = parse_spice_value(toks[i + 2])
+                            result.setdefault(current_model, val)
+                        except ValueError:
+                            pass
+                        break
+                    # Формат 3: vth0  =-0.46
+                    if next_tok.startswith("=") and len(next_tok) > 1:
+                        try:
+                            val = parse_spice_value(next_tok[1:])
+                            result.setdefault(current_model, val)
+                        except ValueError:
+                            pass
+                        break
+
+        # Строка без «+» и без «.model» закрывает текущий блок
+        if current_model and stripped and not stripped.startswith("+") and ".model" not in low:
+            current_model = None
+
+    return result
+
+
 def _parse_supply_voltage(lines: list[str]) -> Optional[float]:
     """
     Ищет напряжение питания в netlist.
@@ -261,7 +327,12 @@ def parse_netlist(path: str | Path) -> NetlistData:
                 transistors.append(t)
 
     tox_n, tox_p = _parse_tox(lines)
-    supply_v = _parse_supply_voltage(lines)
+    supply_v    = _parse_supply_voltage(lines)
+    vth0_map    = _parse_vth0_map(lines)
+
+    # Привязываем vth0 к каждому транзистору по имени его модели
+    for t in transistors:
+        t.vth0 = vth0_map.get(t.model.upper())
 
     return NetlistData(
         lines=lines,
