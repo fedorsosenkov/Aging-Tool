@@ -262,6 +262,9 @@ class WorkerSignals(QObject):
     error    = pyqtSignal(str)
 
 
+_VTH_PMOS_FALLBACK = 0.46   # В — резерв, если vth0 не найдено в .model блоке
+
+
 class AnalysisWorker(QThread):
     def __init__(
         self,
@@ -323,7 +326,11 @@ class MainWindow(QMainWindow):
         self._netlist_path: Path | None = None
         self._chosen_transistors: list[str] = []
         self._aging_results: AgingResults | None = None
+<<<<<<< Updated upstream
         self._aging_params: tuple = (10.0, 0.4, 0.27, 0.24e-16)  # (years, vth_pmos, n_hci, sigma)
+=======
+        self._aging_params: tuple = (10.0, 0.46, 0.27, 0.24e-16)  # (years, vth_pmos, n_hci, sigma)
+>>>>>>> Stashed changes
         self._report_path: Path | None = None
         self._worker: AnalysisWorker | None = None
         # Log-данные сохраняются для повторного расчёта при другой температуре
@@ -983,19 +990,47 @@ class MainWindow(QMainWindow):
         self._log(f"✅ Загружен log-файл: {path}")
 
     def _open_params_dialog(self) -> None:
-        dlg = AgingParamsDialog(self)
+        # Определяем, удалось ли распарсить vth0 из .model блоков netlist
+        vth_parsed: float | None = None
+        if self._netlist is not None:
+            for t in self._netlist.transistors:
+                if t.is_pmos and t.vth0 is not None:
+                    vth_parsed = abs(t.vth0)
+                    break
+
+        dlg = AgingParamsDialog(self, vth_parsed=vth_parsed)
         dlg._years_spin.setValue(int(self._aging_params[0]))
+<<<<<<< Updated upstream
         dlg._vth_spin.setValue(self._aging_params[1])
+=======
+        # Поле vth заполняем из params только если оно доступно для редактирования
+        if vth_parsed is None:
+            dlg._vth_spin.setValue(self._aging_params[1])
+>>>>>>> Stashed changes
         dlg._n_hci_spin.setValue(self._aging_params[2])
         dlg._sigma_spin.setValue(self._aging_params[3] / 1e-16)
         if dlg.exec():
             self._aging_params = (dlg.years, dlg.vth_pmos, dlg.n_hci, dlg.sigma_mobility)
+<<<<<<< Updated upstream
             self._lbl_params.setText(
                 f"Время наработки: {int(dlg.years)} лет  |  |Vth| PMOS: {dlg.vth_pmos:.3f} В"
                 f"  |  n={dlg.n_hci:.2f}  |  σ={dlg.sigma_mobility / 1e-16:.2f}×10⁻¹⁶"
             )
             self._log(
                 f"⚙️ Параметры: {int(dlg.years)} лет, Vth={dlg.vth_pmos:.3f} В, "
+=======
+            vth_label = (
+                f"Vth={dlg.vth_pmos:.3f} В (авто)"
+                if vth_parsed is not None
+                else f"Vth={dlg.vth_pmos:.3f} В (ручной ввод)"
+            )
+            self._lbl_params.setText(
+                f"Время наработки: {int(dlg.years)} лет  |  {vth_label}"
+                f"  |  n={dlg.n_hci:.2f}  |  σ={dlg.sigma_mobility / 1e-16:.2f}×10⁻¹⁶"
+            )
+            self._log(
+                f"⚙️ Параметры: {int(dlg.years)} лет, {vth_label}, "
+>>>>>>> Stashed changes
                 f"n_hci={dlg.n_hci:.2f}, σ={dlg.sigma_mobility:.2e}"
             )
 
@@ -1281,7 +1316,7 @@ class MainWindow(QMainWindow):
             return
 
         t_new = dlg.temperature_c
-        years, vth_pmos = self._aging_params
+        years, vth_pmos, *_ = self._aging_params
         tox_nmos = self._netlist.tox_nmos or 3.9e-9
         tox_pmos = self._netlist.tox_pmos or 3.9e-9
 

@@ -76,7 +76,10 @@ def _build_transistor_model_map(
     """
     chosen_upper = {n.upper() for n in chosen_names}
     result: dict[str, tuple[str, float, float]] = {}
+<<<<<<< Updated upstream
     typical_vth = 0.4   # В — опорное значение для масштабирования vth0
+=======
+>>>>>>> Stashed changes
 
     for t in netlist.transistors:
         if t.name not in chosen_upper:
@@ -97,7 +100,13 @@ def _build_transistor_model_map(
             result[t.name] = (t.model.upper(), 1.0, 1.0)
         else:
             new_name = f"{t.name}_AGED"
+<<<<<<< Updated upstream
             vth_mul  = (typical_vth + delta) / typical_vth
+=======
+            # Используем реальный vth0 из .model блока; 0.4 В — крайний резерв
+            vth_ref  = abs(t.vth0) if t.vth0 is not None else 0.4
+            vth_mul  = (vth_ref + delta) / vth_ref
+>>>>>>> Stashed changes
             result[t.name] = (new_name, vth_mul, mob)
 
     return result
@@ -143,6 +152,7 @@ def write_aged_netlist(
     lib_replaced         = False
 
     def _apply_vth_u0(lines: list[str], vth_mul: float, mob_factor: float) -> list[str]:
+<<<<<<< Updated upstream
         """Применяет vth_mul к vth0 и mob_factor к u0 в блоке .model."""
         out = []
         for raw in lines:
@@ -175,6 +185,73 @@ def write_aged_netlist(
             out.append(line)
         return out
 
+=======
+        """
+        Применяет vth_mul к vth0 и mob_factor к u0 в блоке .model.
+
+        Поддерживает все три формата PTM/BSIM4 (ведущий «+» у первого параметра
+        строки всегда присутствует):
+          1. +vth0=0.52          — знак = слит с именем
+          2. +vth0  =  0.52      — три отдельных токена
+          3. +vth0  =-0.46       — знак = слит со значением (PTM PMOS)
+        """
+        def _scale_param(toks: list[str], name: str, factor: float) -> bool:
+            """
+            Ищет параметр name в списке токенов и умножает его значение на factor.
+            Возвращает True, если замена произошла.
+            """
+            for i, tok in enumerate(toks):
+                clean = tok.lstrip("+")
+                tl = clean.lower()
+                # Точное совпадение имени (не «vth0» внутри «vth0b» и т.п.)
+                if not (tl == name or tl.startswith(name + "=")):
+                    continue
+
+                # Формат 1: name=value
+                if "=" in clean:
+                    try:
+                        key, val_str = clean.split("=", 1)
+                        val = float(val_str)
+                        prefix = tok[: len(tok) - len(clean)]   # сохраняем «+»
+                        toks[i] = prefix + key + "=" + f"{val * factor:.6f}"
+                        return True
+                    except ValueError:
+                        pass
+
+                # Форматы 2 и 3 — значение в следующем токене
+                if i + 1 < len(toks):
+                    nxt = toks[i + 1]
+                    # Формат 2: name  =  value
+                    if nxt == "=" and i + 2 < len(toks):
+                        try:
+                            val = float(toks[i + 2])
+                            toks[i + 2] = f"{val * factor:.6f}"
+                            return True
+                        except ValueError:
+                            pass
+                    # Формат 3: name  =value
+                    if nxt.startswith("=") and len(nxt) > 1:
+                        try:
+                            val = float(nxt[1:])
+                            toks[i + 1] = "=" + f"{val * factor:.6f}"
+                            return True
+                        except ValueError:
+                            pass
+            return False
+
+        out = []
+        for raw in lines:
+            toks = raw.split()
+            changed = False
+            if "vth0" in raw.lower() and vth_mul != 1.0:
+                changed |= _scale_param(toks, "vth0", vth_mul)
+            if "u0" in raw.lower() and mob_factor != 1.0:
+                # mob_factor > 1 → u0 уменьшается → делим (factor = 1/mob_factor)
+                changed |= _scale_param(toks, "u0", 1.0 / mob_factor)
+            out.append(" ".join(toks) if changed else raw)
+        return out
+
+>>>>>>> Stashed changes
     def flush_model_block() -> None:
         nonlocal current_model_lines, current_base_model
         if not current_model_lines:

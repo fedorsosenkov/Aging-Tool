@@ -261,7 +261,14 @@ def run_aging_analysis(
         if t is None:
             continue
         if t.is_pmos:
+<<<<<<< Updated upstream
             res = calculate_nbti(t, log, tox_pmos, vth_pmos, target_years, sigma_mobility)
+=======
+            # Предпочитаем vth0, запарсенный из .model блока; пользовательское
+            # значение используется только как резерв
+            vth_use = abs(t.vth0) if t.vth0 is not None else vth_pmos
+            res = calculate_nbti(t, log, tox_pmos, vth_use, target_years, sigma_mobility)
+>>>>>>> Stashed changes
         else:
             res = calculate_hci(t, log, tox_nmos, target_years, n_hci, sigma_mobility)
         results.transistors.append(res)
